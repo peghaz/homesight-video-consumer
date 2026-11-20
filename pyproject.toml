@@ -1,0 +1,42 @@
+[build-system]
+requires = ["scikit-build-core>=0.10,<1", "pybind11>=3.0.4,<4"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "homesight-core"
+version = "0.1.0"
+description = "Durable native RTSP recording, motion analysis and segment storage"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["numpy>=1.26"]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.9", "mypy>=1.14", "pydantic-settings>=2.7", "rich>=13.9"]
+docs = ["sphinx>=8,<10", "breathe>=4.36", "myst-parser>=4", "sphinxcontrib-mermaid>=2.1.1,<3"]
+
+[tool.scikit-build]
+wheel.packages = ["src/homesight_core"]
+build-dir = "build/python/{wheel_tag}"
+cmake.build-type = "RelWithDebInfo"
+sdist.exclude = [
+    "/.superpowers/**", "/IMPLEMENTATION_PROGRESS.md", "/.env", "/.env.*",
+    "/.aws/**", "/.agents/**", "/.codex/**", "/.git/**", "/.venv/**",
+    "/.vscode/**", "/build/**", "/dist/**", "/wheels/**", "/**/__pycache__/**",
+    "/.pytest_cache/**", "/.mypy_cache/**", "/.ruff_cache/**",
+]
+sdist.include = ["/.env.example"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "D", "DTZ", "ANN", "TID", "RUF"]
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+[tool.ruff.lint.per-file-ignores]
+"*.pyi" = ["D", "E501"]
+"main.py" = ["D", "ANN"] # Preserved starter entry point.
+[tool.mypy]
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["src/homesight_core", "tests"]

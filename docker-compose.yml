@@ -1,0 +1,30 @@
+# Below is the configuration for a local MinIO S3-compatible storage setup with a bucket creation service.
+services:
+  minio:
+    image: pgsty/silo:RELEASE.2026-11-12T00-00-00Z
+    command: server /data --console-address ":9001"
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    env_file: .env
+    environment:
+      MINIO_ROOT_USER: ${TEST_S3_ACCESS_KEY:?Missing access key}
+      MINIO_ROOT_PASSWORD: ${TEST_S3_SECRET_KEY:?Missing secret key}
+    volumes:
+      - minio-data:/data
+
+  create-bucket:
+    image: pgsty/mc:RELEASE.2026-11-12T00-00-00Z
+    depends_on:
+      - minio
+    env_file: .env
+    entrypoint: [ "/bin/sh", "-ec" ]
+    command:
+      - |
+        until mc alias set local http://minio:9000 "$$TEST_S3_ACCESS_KEY" "$$TEST_S3_SECRET_KEY"; do
+          sleep 2
+        done
+        mc mb --ignore-existing "local/$$TEST_S3_BUCKET"
+
+volumes:
+  minio-data:

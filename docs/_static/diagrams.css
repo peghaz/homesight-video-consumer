@@ -1,0 +1,22 @@
+/* Keep diagram labels readable inside the guide's text column and on phones. */
+pre.mermaid {
+    box-sizing: border-box;
+    min-width: 0;
+    overflow-x: auto;
+    padding: 1rem;
+    border: 1px solid #d9dfe5;
+    border-radius: 0.4rem;
+    background: #fafbfc;
+}
+
+pre.mermaid > svg {
+    min-width: 60rem;
+}
+
+.mermaid-container-fullscreen pre.mermaid {
+    display: block;
+}
+
+.mermaid-container-fullscreen .mermaid svg {
+    height: auto !important;
+}
