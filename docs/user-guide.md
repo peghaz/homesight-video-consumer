@@ -8,6 +8,7 @@ Use HomeSight Core to record cameras, analyze saved video, and integrate recordi
 - [Connecting to a camera](#connecting-to-a-camera)
 - [Recording and recovery](#recording-and-recovery)
 - [Recording events](#recording-events)
+  - [Reading segment metadata](#reading-segment-metadata)
 - [Motion and frame sampling](#motion-and-frame-sampling)
 - [S3 storage](#s3-storage)
 - [Using the C++ library](#using-the-c-library)
@@ -176,6 +177,65 @@ with core.SegmentRecorder(config) as recorder:
 `rtsp_url` and `persist_catalog_update()` are supplied by the application. An event contains `event_id`, per-camera `sequence`, `kind`, and a `completed_segment` snapshot. The snapshot includes `state_revision`, a stable `segment.segment_id`, recording times, media duration, motion result, storage outcome, URI, and errors. Apply each revision idempotently before acknowledging it.
 
 The short README example leaves events unacknowledged. For a continuously running application, consume events and acknowledge them after persisting the corresponding catalog updates.
+
+### Reading segment metadata
+
+Use the configuration above and replace its recorder block with this example to inspect each segment revision. `persist_catalog_update(event)` remains your application's transaction, as in the preceding example.
+
+```python
+from datetime import UTC, datetime
+
+import homesight_core as core
+
+with core.SegmentRecorder(config) as recorder:
+    while True:
+        event: core.RecorderEvent | None = recorder.wait_for_next_recorder_event(timeout_ms=1000)
+        if event is None:
+            continue  # No event arrived before the timeout.
+
+        completed: core.CompletedSegment = event.completed_segment
+        segment: core.SegmentInfo = completed.segment
+        start_time: datetime = datetime.fromtimestamp(segment.start_epoch_ms / 1000, tz=UTC)
+        end_time: datetime = datetime.fromtimestamp(segment.end_epoch_ms / 1000, tz=UTC)
+
+        print("Event:", event.event_id, event.sequence, event.kind.name)
+        print("Segment:", segment.camera_name, segment.segment_id)
+        print("Revision:", completed.state_revision)
+        print("Start UTC:", start_time.isoformat())
+        print("End UTC:", end_time.isoformat())
+        print("Duration (seconds):", segment.duration_seconds)
+        print("Size (bytes):", segment.file_size_bytes)
+        print("Codec:", segment.video_codec)
+        print("Storage:", completed.storage_outcome.name)
+        print("Storage URI:", completed.storage_uri)  # May be None.
+        print("Storage error:", completed.storage_error)
+
+        motion: core.MotionAnalysisResult | None = completed.motion
+        if motion is None:
+            print("Motion: unavailable (for example, analysis was disabled)")
+        else:
+            print("Motion status:", motion.status.name)
+            print("Has motion:", motion.has_motion)  # None means unknown, not False.
+            if motion.status == core.MotionAnalysisStatus.valid:
+                print("Peak changed area:", f"{motion.peak_changed_area:.1%}")
+                print("Mean changed area:", f"{motion.mean_changed_area:.1%}")
+                print("Motion/analyzed frames:", motion.frames_with_motion, motion.frames_analyzed)
+            print("Motion diagnostic:", motion.error)
+        print("Motion analysis error:", completed.motion_analysis_error)
+
+        snapshot: dict[str, object] = completed.to_dict()
+        print("Complete snapshot:", snapshot)
+        persist_catalog_update(event)  # Apply the revision and commit before acknowledging.
+        recorder.acknowledge_recorder_events([event.event_id])
+```
+
+The timestamps are Unix milliseconds converted to timezone-aware UTC datetimes. `duration_seconds` is the finalized media duration; `file_size_bytes` is the original finalized size, even if the staging file has since been removed. `video_codec` identifies H.264 or H.265. Use `storage_uri` to locate stored footage rather than assuming the original `staging_file_path` still exists.
+
+A `segment_completed` event can have `storage_outcome=pending` and `storage_uri=None`. Later `storage_changed` events carry the same segment ID with a higher `state_revision` and the storage result, including a URI when available. A missing URI alone does not mean storage failed; inspect `storage_outcome` and `storage_error`. Process all event kinds, including quota eviction, and update your catalog by `(camera_name, segment_id)` only when the incoming revision is newer. Replayed or older revisions must not overwrite newer state; acknowledge each event after its transaction commits, including events already applied.
+
+`motion=None` means no analysis result is available. When a result exists, `has_motion` is `True` or `False` only for `status=valid`; warm-up, insufficient data, and failure leave it `None`. Do not interpret unknown results as no motion. Changed-area values are fractions from 0 to 1, and frame counts describe analyzed samples rather than every video frame. The example displays these metrics only for valid results.
+
+`completed.to_dict()` includes the nested segment and optional motion snapshot, storage state, revision, and diagnostics. It preserves Python `Path` and enum values, so convert those explicitly if your catalog requires JSON. For field types and method signatures, see the generated Python API for {py:class}`homesight_core.SegmentInfo`, {py:class}`homesight_core.CompletedSegment`, {py:class}`homesight_core.MotionAnalysisResult`, and {py:class}`homesight_core.RecorderEvent`.
 
 ## Motion and frame sampling
 
