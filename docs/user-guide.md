@@ -10,6 +10,7 @@ Use HomeSight Core to record cameras, analyze saved video, and integrate recordi
 - [Recording events](#recording-events)
   - [Reading segment metadata](#reading-segment-metadata)
 - [Motion and frame sampling](#motion-and-frame-sampling)
+  - [Sample N frames per second](#sample-n-frames-per-second)
 - [S3 storage](#s3-storage)
 - [Using the C++ library](#using-the-c-library)
 
@@ -260,6 +261,34 @@ assert frames.shape == (8, 224, 224, 3)
 The analyzer maintains one MOG2 background model across chronological segments. Defaults: 320-pixel analysis width, 2 fps, 30-second warm-up, 120-frame history, variance threshold 16, automatic learning rate, and shadow exclusion. Motion requires at least 1% foreground in two evaluated frames. Status is `valid`, `warming_up`, `insufficient_data`, or `failed`; `has_motion` is `None` for every unknown status. Warm-up spanning any part of a segment keeps that entire segment unknown. `delete_segments_without_motion=True` deletes only valid negative results. Restart, reconnect, resolution changes, explicit `reset()`, and supplied media-time discontinuities reset the model. The standalone `analyze_segment_motion()` helper starts a fresh model on every call.
 
 Sampled frames are evenly spaced in media time, center-cropped to the requested aspect ratio, and resized. The NumPy array owns its native RGB byte buffer through a capsule; it remains valid independently of the recorder or decoder. Blocking native operations release the GIL. CPU decoding is the default. `use_gpu_decoding=True` allows GStreamer's ranked hardware decoders, with CPU fallback; configure and inspect plugin ranks on the deployment host before claiming hardware acceleration.
+
+### Sample N frames per second
+
+Use `sample_clip_frames_from_segment_at_rate()` when downstream processing needs a sampling rate rather than a fixed total count:
+
+```python
+import numpy as np
+from numpy.typing import NDArray
+
+frames: NDArray[np.uint8]
+timestamps_ms: list[int]
+frames, timestamps_ms = core.sample_clip_frames_from_segment_at_rate(
+    "/data/segment.mp4",
+    frames_per_second=2,
+    frame_width=224,
+    frame_height=224,
+)
+print(frames.shape)  # (actual_count, 224, 224, 3), RGB uint8
+print(timestamps_ms)  # Actual presentation times in milliseconds relative to the clip.
+```
+
+Each clip-relative second is divided into N equal half-open intervals, starting at zero. The first decoded frame in each occupied interval is selected. At 2 frames per second these intervals are `[0, 0.5)`, `[0.5, 1)`, `[1, 1.5)`, and so on. Sampling includes the final partial second: a 10.3-second clip can contribute a frame from its last 0.3 seconds. Empty intervals remain empty, so low-rate or irregular footage can return fewer frames; source frames are never duplicated or padded.
+
+The returned timestamp list has one entry per RGB frame, in the same order. Values are actual decoded presentation times truncated to milliseconds, rather than scheduled target times. For a recorder-host UTC estimate, add an offset to the corresponding segment's `start_epoch_ms`. The existing `sample_clip_frames_from_segment()` still returns just an array with the requested total frame count.
+
+Rate sampling decodes sequentially, center-crops, and resizes without modifying the source. It retains the existing dimension bounds of 1–8192 pixels, the default ten-second decode wall-time budget, optional GPU decoding, and independent NumPy buffer ownership. The positive integer rate does not guarantee a fixed output count. Actual output exceeding 4096 frames or 1 GiB of RGB pixels raises `InvalidConfigError`; it is never silently truncated. Increase `decode_timeout_seconds` for longer clips when needed. Missing or corrupt media, regressing presentation times, and exhausted decode time raise `SegmentDecodingError`.
+
+Both samplers accept a local file path. For S3 recordings, first use `download_segment_to_local_file()` to obtain a local copy; the optional rate-sampling section in {download}`ExampleTrial.ipynb <../notebooks/ExampleTrial.ipynb>` demonstrates this flow. See {py:func}`homesight_core.sample_clip_frames_from_segment_at_rate` for the generated API reference.
 
 ## S3 storage
 

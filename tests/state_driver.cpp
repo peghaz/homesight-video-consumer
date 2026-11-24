@@ -55,6 +55,33 @@ int main(int argc, char **argv)
             }
             return 0;
         }
+        if (std::string(argv[1]) == "sample_rate")
+        {
+            if (argc != 4)
+            {
+                return 2;
+            }
+            auto frames = homesight::sample_clip_frames_from_segment_at_rate(
+                directory, std::stoi(argv[3]), 16, 12, false, 30);
+            if (frames.frame_count < 1 ||
+                frames.frame_timestamps_ms.size() != static_cast<std::size_t>(frames.frame_count) ||
+                frames.rgb_pixels.size() !=
+                    static_cast<std::size_t>(frames.frame_count) * 16 * 12 * 3)
+            {
+                return 11;
+            }
+            const auto copied = frames.rgb_pixels;
+            const auto counted = homesight::sample_clip_frames_from_segment(directory, 4, 16, 12);
+            if (frames.rgb_pixels != copied || counted.frame_count != 4)
+            {
+                return 12;
+            }
+            for (const auto timestamp : frames.frame_timestamps_ms)
+            {
+                std::cout << timestamp << '\n';
+            }
+            return 0;
+        }
         if (std::string(argv[1]) == "media")
         {
             const auto *source = std::getenv("TEST_SEGMENT");
@@ -65,6 +92,12 @@ int main(int argc, char **argv)
             auto frames = homesight::sample_clip_frames_from_segment(source, 4, 64, 48, false, 30);
             if (frames.rgb_pixels.size() != 4 * 64 * 48 * 3 ||
                 frames.frame_timestamps_ms.size() != 4)
+            {
+                return 11;
+            }
+            const auto sampled =
+                homesight::sample_clip_frames_from_segment_at_rate(source, 2, 64, 48, false, 30);
+            if (sampled.frame_count < 1 || sampled.frame_timestamps_ms.empty())
             {
                 return 11;
             }

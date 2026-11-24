@@ -14,6 +14,8 @@ uv run mypy
 
 Pytest is the single test runner, including for native helpers, installation, and integration checks. The `asan` and `tsan` CMake presets build separate sanitizer variants. Integration suites are opt-in and use the inputs described below. Playback verification also requires `ffprobe` from FFmpeg.
 
+Frame-sampling unit tests generate short, deterministic lossless clips with `ffmpeg` to check interval boundaries, sparse frames, and variable presentation times. Install FFmpeg to run these tests; they skip explicitly when it is unavailable. These generated fixtures are separate from the actual-camera footage used by the opt-in media suites.
+
 Build the Python wheel and source distribution with:
 
 ```sh

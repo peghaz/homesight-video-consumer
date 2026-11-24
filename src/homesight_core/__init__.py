@@ -30,6 +30,7 @@ from ._native import (
     analyze_segment_motion,
     create_segment_storage,
     sample_clip_frames_from_segment,
+    sample_clip_frames_from_segment_at_rate,
 )
 
 __all__: list[str] = [
@@ -62,4 +63,5 @@ __all__: list[str] = [
     "analyze_segment_motion",
     "create_segment_storage",
     "sample_clip_frames_from_segment",
+    "sample_clip_frames_from_segment_at_rate",
 ]

@@ -24,4 +24,23 @@ namespace homesight
                                                                 int frame_height,
                                                                 bool use_gpu_decoding = false,
                                                                 double decode_timeout_seconds = 10);
+/** Sample distinct decoded frames at up to a requested rate, including a partial final second.
+ * Each clip-relative second is divided into frames_per_second equal, half-open intervals.
+ * The first decoded frame in each occupied interval is retained; empty intervals are not padded.
+ * Decoding is sequential. Pixels are center-cropped and resized, and the source is not modified.
+ * @param path Existing recording supported by the installed GStreamer decoders.
+ * @param frames_per_second Positive integer number of sampling intervals per second.
+ * @param frame_width Output width from 1 to 8192 pixels.
+ * @param frame_height Output height from 1 to 8192 pixels.
+ * @param use_gpu_decoding Allow ranked hardware decoders with CPU fallback; default false.
+ * @param decode_timeout_seconds Positive decode wall-time budget, at most 86400 seconds;
+ * default 10.
+ * @return Owned RGB pixels and actual clip-relative presentation timestamps in milliseconds.
+ * The result outlives the decoder and contains at most 4096 frames and 1 GiB of RGB bytes.
+ * @throws InvalidConfigError If arguments or actual output allocation exceed their limits.
+ * @throws SegmentDecodingError If decoding fails, times regress, no frames exist, or time expires.
+ */
+[[nodiscard]] SampledClipFrames sample_clip_frames_from_segment_at_rate(
+    const std::filesystem::path &path, int frames_per_second, int frame_width, int frame_height,
+    bool use_gpu_decoding = false, double decode_timeout_seconds = 10);
 } // namespace homesight

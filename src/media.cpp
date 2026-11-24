@@ -10,6 +10,7 @@
 #include <mutex>
 #include <opencv2/imgproc.hpp>
 #include <unistd.h>
+#include <utility>
 
 namespace homesight::detail
 {
@@ -227,7 +228,7 @@ std::optional<DecodedFrame> MediaReader::read_frame()
                     ? static_cast<double>(duration) / GST_SECOND
                     : (info.fps_n > 0 ? static_cast<double>(info.fps_d) / info.fps_n : 0);
             DecodedFrame result{pixels.clone(), static_cast<double>(stream_time) / GST_SECOND,
-                                frame_duration};
+                                frame_duration, stream_time};
             gst_video_frame_unmap(&frame);
             gst_sample_unref(sample);
             return result;
@@ -251,25 +252,62 @@ std::optional<DecodedFrame> MediaReader::read_frame()
 
 namespace homesight
 {
+namespace
+{
+constexpr std::size_t maximum_sample_bytes = 1024ULL * 1024 * 1024;
+constexpr int maximum_sample_count = 4096;
+
+std::size_t validate_sampling_dimensions(int width, int height, double timeout)
+{
+    if (width < 1 || height < 1 || width > 8192 || height > 8192 || !std::isfinite(timeout) ||
+        timeout <= 0 || timeout > 86400)
+    {
+        throw InvalidConfigError("Invalid frame sampling dimensions or timeout (limit: 1 GiB)");
+    }
+    return static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 3;
+}
+
+void validate_sample_allocation(int count, std::size_t frame_bytes)
+{
+    if (count < 1 || count > maximum_sample_count ||
+        static_cast<std::size_t>(count) > maximum_sample_bytes / frame_bytes)
+    {
+        throw InvalidConfigError("Frame sampling exceeds 4096 frames or 1 GiB of RGB pixels");
+    }
+}
+
+void resize_sample(const cv::Mat &rgb, int width, int height, std::uint8_t *destination)
+{
+    const double aspect = static_cast<double>(width) / height;
+    int crop_width = rgb.cols;
+    int crop_height = rgb.rows;
+    if (static_cast<double>(crop_width) / crop_height > aspect)
+    {
+        crop_width = std::max(1, static_cast<int>(crop_height * aspect));
+    }
+    else
+    {
+        crop_height = std::max(1, static_cast<int>(crop_width / aspect));
+    }
+    cv::Rect crop((rgb.cols - crop_width) / 2, (rgb.rows - crop_height) / 2, crop_width,
+                  crop_height);
+    cv::Mat output(height, width, CV_8UC3, destination);
+    cv::resize(rgb(crop), output, output.size(), 0, 0, cv::INTER_AREA);
+}
+} // namespace
+
 SampledClipFrames sample_clip_frames_from_segment(const std::filesystem::path &path, int count,
                                                   int width, int height, bool use_gpu,
                                                   double timeout)
 {
-    if (count < 1 || count > 4096 || width < 1 || height < 1 || width > 8192 || height > 8192 ||
-        !std::isfinite(timeout) || timeout <= 0 || timeout > 86400 ||
-        static_cast<std::uint64_t>(count) * static_cast<unsigned>(width) *
-                static_cast<unsigned>(height) * 3 >
-            1024ULL * 1024 * 1024)
-    {
-        throw InvalidConfigError("Invalid frame sampling dimensions or timeout (limit: 1 GiB)");
-    }
+    const auto frame_bytes = validate_sampling_dimensions(width, height, timeout);
+    validate_sample_allocation(count, frame_bytes);
     detail::MediaReader reader(path, use_gpu, timeout);
     const auto duration = reader.duration_seconds();
     SampledClipFrames result;
     result.frame_count = count;
     result.frame_width = width;
     result.frame_height = height;
-    const auto frame_bytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 3;
     result.rgb_pixels.resize(frame_bytes * static_cast<std::size_t>(count));
     for (int i = 0; i < count; ++i)
     {
@@ -279,23 +317,63 @@ SampledClipFrames sample_clip_frames_from_segment(const std::filesystem::path &p
         {
             throw SegmentDecodingError("Segment ended before the requested frame");
         }
-        const double aspect = static_cast<double>(width) / height;
-        int crop_width = frame->rgb.cols;
-        int crop_height = frame->rgb.rows;
-        if (static_cast<double>(crop_width) / crop_height > aspect)
-        {
-            crop_width = std::max(1, static_cast<int>(crop_height * aspect));
-        }
-        else
-        {
-            crop_height = std::max(1, static_cast<int>(crop_width / aspect));
-        }
-        cv::Rect crop((frame->rgb.cols - crop_width) / 2, (frame->rgb.rows - crop_height) / 2,
-                      crop_width, crop_height);
-        cv::Mat output(height, width, CV_8UC3,
-                       result.rgb_pixels.data() + static_cast<std::size_t>(i) * frame_bytes);
-        cv::resize(frame->rgb(crop), output, output.size(), 0, 0, cv::INTER_AREA);
+        resize_sample(frame->rgb, width, height,
+                      result.rgb_pixels.data() + static_cast<std::size_t>(i) * frame_bytes);
         result.frame_timestamps_ms.push_back(static_cast<std::int64_t>(frame->seconds * 1000));
+    }
+    return result;
+}
+
+SampledClipFrames sample_clip_frames_from_segment_at_rate(const std::filesystem::path &path,
+                                                          int rate, int width, int height,
+                                                          bool use_gpu, double timeout)
+{
+    const auto frame_bytes = validate_sampling_dimensions(width, height, timeout);
+    if (rate < 1)
+    {
+        throw InvalidConfigError("frames_per_second must be a positive integer");
+    }
+    detail::MediaReader reader(path, use_gpu, timeout);
+    SampledClipFrames result;
+    result.frame_width = width;
+    result.frame_height = height;
+    std::optional<std::pair<std::uint64_t, std::uint64_t>> previous_interval;
+    std::optional<std::uint64_t> previous_timestamp;
+    while (auto frame = reader.read_frame())
+    {
+        const auto timestamp = frame->timestamp_ns;
+        if (previous_timestamp && timestamp < *previous_timestamp)
+        {
+            throw SegmentDecodingError("Decoded presentation timestamps regressed");
+        }
+        previous_timestamp = timestamp;
+        // Work within each second so neither rate multiplication nor floating-point drift
+        // can misclassify a frame at an interval boundary.
+        const auto second = timestamp / GST_SECOND;
+        const auto interval =
+            (timestamp % GST_SECOND) * static_cast<std::uint64_t>(rate) / GST_SECOND;
+        const auto slot = std::pair{second, interval};
+        if (previous_interval && slot == *previous_interval)
+        {
+            continue;
+        }
+        validate_sample_allocation(result.frame_count + 1, frame_bytes);
+        const auto offset = result.rgb_pixels.size();
+        const auto required_bytes = offset + frame_bytes;
+        if (required_bytes > result.rgb_pixels.capacity())
+        {
+            result.rgb_pixels.reserve(std::min(
+                maximum_sample_bytes, std::max(required_bytes, result.rgb_pixels.capacity() * 2)));
+        }
+        result.rgb_pixels.resize(required_bytes);
+        resize_sample(frame->rgb, width, height, result.rgb_pixels.data() + offset);
+        result.frame_timestamps_ms.push_back(static_cast<std::int64_t>(timestamp / GST_MSECOND));
+        ++result.frame_count;
+        previous_interval = slot;
+    }
+    if (result.frame_count == 0)
+    {
+        throw SegmentDecodingError("Segment contains no decoded video frames");
     }
     return result;
 }

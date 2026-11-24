@@ -1,5 +1,6 @@
 #pragma once
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <gst/gst.h>
 #include <memory>
@@ -20,6 +21,7 @@ struct DecodedFrame
     cv::Mat rgb;
     double seconds = 0;
     double duration_seconds = 0;
+    std::uint64_t timestamp_ns = 0;
 };
 class MediaReader
 {

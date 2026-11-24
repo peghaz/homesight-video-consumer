@@ -321,4 +321,12 @@ def sample_clip_frames_from_segment(
     use_gpu_decoding: bool = ...,
     decode_timeout_seconds: float = ...,
 ) -> NDArray[np.uint8]: ...
+def sample_clip_frames_from_segment_at_rate(
+    segment_file_path: FilePath,
+    frames_per_second: int,
+    frame_width: int,
+    frame_height: int,
+    use_gpu_decoding: bool = ...,
+    decode_timeout_seconds: float = ...,
+) -> tuple[NDArray[np.uint8], list[int]]: ...
 def create_segment_storage(config: SegmentStorageConfig) -> SegmentStorage: ...

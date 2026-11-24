@@ -441,6 +441,40 @@ PYBIND11_MODULE(_native, m)
         "temporaries; allocation is limited to 1 GiB.\n\nRaises:\n    InvalidConfigError: Count, "
         "dimensions, timeout, or allocation bounds are invalid.\n    SegmentDecodingError: "
         "Decode/seek fails or exceeds its budget.");
+    m.def(
+        "sample_clip_frames_from_segment_at_rate",
+        [](const std::filesystem::path &path, int rate, int width, int height, bool gpu,
+           double timeout)
+        {
+            SampledClipFrames frames;
+            {
+                py::gil_scoped_release release;
+                frames = sample_clip_frames_from_segment_at_rate(path, rate, width, height, gpu,
+                                                                 timeout);
+            }
+            auto timestamps = std::move(frames.frame_timestamps_ms);
+            return py::make_tuple(frames_array(std::move(frames)), std::move(timestamps));
+        },
+        py::arg("segment_file_path"), py::arg("frames_per_second"), py::arg("frame_width"),
+        py::arg("frame_height"), py::arg("use_gpu_decoding") = false,
+        py::arg("decode_timeout_seconds") = 10,
+        "Sample up to N distinct frames per clip-relative second, including the partial final "
+        "second. Each second is divided into N equal half-open intervals; the first decoded frame "
+        "in each occupied interval is selected. Empty intervals are not padded. Decoding is "
+        "sequential and does not modify the source.\n\nArgs:\n    segment_file_path: Local "
+        "recording "
+        "supported by installed decoders.\n    frames_per_second: Positive integer interval count "
+        "per second.\n    frame_width: Output width from 1 to 8192 pixels.\n    frame_height: "
+        "Output "
+        "height from 1 to 8192 pixels.\n    use_gpu_decoding: Allow ranked hardware decoders with "
+        "CPU fallback; default False.\n    decode_timeout_seconds: Positive wall-time budget up to "
+        "86400 seconds; default 10.\n\nReturns:\n    Tuple of an owned contiguous uint8 RGB NumPy "
+        "array shaped (count, frame_height, frame_width, 3) and a list of actual clip-relative "
+        "presentation timestamps in milliseconds, one per frame. count can be lower than the "
+        "requested rate times duration. Pixels outlive the decoder.\n\nRaises:\n    "
+        "InvalidConfigError: Invalid arguments or actual output exceeds 4096 frames or 1 GiB of "
+        "RGB pixels; results are never silently truncated.\n    SegmentDecodingError: Decoding "
+        "fails, timestamps regress, no frames exist, or the wall-time budget expires.");
     py::class_<SegmentStorage>(m, "SegmentStorage",
                                "Synchronous local/S3 backend returned by create_segment_storage(). "
                                "Standalone callers coordinate file lifetimes; recorder workers add "
